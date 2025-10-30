@@ -3,17 +3,20 @@
 namespace TarunKorat\LaravelMigrationSquasher\Services;
 
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\DB;
 use TarunKorat\LaravelMigrationSquasher\Contracts\SchemaInspectorInterface;
 
 class SchemaDumper
 {
     protected SchemaInspectorInterface $inspector;
     protected array $excludedTables;
+    protected string $connection;
 
-    public function __construct(SchemaInspectorInterface $inspector)
+    public function __construct(SchemaInspectorInterface $inspector, ?string $connection = null)
     {
         $this->inspector = $inspector;
         $this->excludedTables = config('migration-squasher.excluded_tables', ['migrations']);
+        $this->connection = $connection ?? config('database.default');
     }
 
     /**
@@ -84,9 +87,100 @@ class SchemaDumper
     {
         $code = "\n        Schema::create('{$tableName}', function (Blueprint \$table) {\n";
 
-        // Add columns
-        foreach ($tableData['columns'] as $column) {
+        // Group columns to detect Laravel helpers (morphs, timestamps, etc.)
+        $processedColumns = [];
+        $columns = $tableData['columns'];
+
+        for ($i = 0; $i < count($columns); $i++) {
+            $column = $columns[$i];
+
+            // Skip if already processed
+            if (in_array($column['name'], $processedColumns)) {
+                continue;
+            }
+
+            // Check for morphs pattern (column_type + column_id)
+            if (str_ends_with($column['name'], '_type') &&
+                isset($columns[$i + 1]) &&
+                $columns[$i + 1]['name'] === str_replace('_type', '_id', $column['name'])) {
+
+                $morphName = str_replace('_type', '', $column['name']);
+                $code .= "            \$table->morphs('{$morphName}');\n";
+                $processedColumns[] = $column['name'];
+                $processedColumns[] = $columns[$i + 1]['name'];
+                $i++; // Skip next column
+                continue;
+            }
+
+            // Check for uuidMorphs pattern
+            if (str_ends_with($column['name'], '_type') &&
+                isset($columns[$i + 1]) &&
+                $columns[$i + 1]['name'] === str_replace('_type', '_id', $column['name']) &&
+                $columns[$i + 1]['type'] === 'uuid') {
+
+                $morphName = str_replace('_type', '', $column['name']);
+                $code .= "            \$table->uuidMorphs('{$morphName}');\n";
+                $processedColumns[] = $column['name'];
+                $processedColumns[] = $columns[$i + 1]['name'];
+                $i++; // Skip next column
+                continue;
+            }
+
+            // Check for timestamps pattern (created_at + updated_at)
+            if ($column['name'] === 'created_at' &&
+                isset($columns[$i + 1]) &&
+                $columns[$i + 1]['name'] === 'updated_at') {
+
+                $code .= "            \$table->timestamps();\n";
+                $processedColumns[] = 'created_at';
+                $processedColumns[] = 'updated_at';
+                $i++; // Skip next column
+                continue;
+            }
+
+            // Check for timestampsTz pattern
+            if ($column['name'] === 'created_at' &&
+                $column['type'] === 'timestamptz' &&
+                isset($columns[$i + 1]) &&
+                $columns[$i + 1]['name'] === 'updated_at') {
+
+                $code .= "            \$table->timestampsTz();\n";
+                $processedColumns[] = 'created_at';
+                $processedColumns[] = 'updated_at';
+                $i++; // Skip next column
+                continue;
+            }
+
+            // Check for softDeletes pattern
+            if ($column['name'] === 'deleted_at' && $column['nullable']) {
+                $code .= "            \$table->softDeletes();\n";
+                $processedColumns[] = 'deleted_at';
+                continue;
+            }
+
+            // Check for softDeletesTz pattern
+            if ($column['name'] === 'deleted_at' &&
+                $column['type'] === 'timestamptz' &&
+                $column['nullable']) {
+
+                $code .= "            \$table->softDeletesTz();\n";
+                $processedColumns[] = 'deleted_at';
+                continue;
+            }
+
+            // Check for rememberToken pattern
+            if ($column['name'] === 'remember_token' &&
+                $column['nullable'] &&
+                $column['length'] == 100) {
+
+                $code .= "            \$table->rememberToken();\n";
+                $processedColumns[] = 'remember_token';
+                continue;
+            }
+
+            // Regular column
             $code .= $this->buildColumnCode($column);
+            $processedColumns[] = $column['name'];
         }
 
         // Add indexes (excluding primary key as it's handled by column definition)
@@ -131,7 +225,7 @@ class SchemaDumper
     }
 
     /**
-     * Build code for a single column.
+     * Build code for a single column with EXACT specifications.
      *
      * @param array $column
      * @return string
@@ -141,51 +235,182 @@ class SchemaDumper
         $type = $this->mapTypeToLaravel($column['type']);
         $name = $column['name'];
 
+        // Handle special ID columns
+        if ($column['autoincrement'] && in_array($name, ['id'])) {
+            return "            \$table->id();\n";
+        }
+
         // Start building the column definition
         $code = "            \$table->{$type}('{$name}'";
 
-        // Add length for string/char types
-        if (in_array($type, ['string', 'char']) && $column['length']) {
-            $code .= ", {$column['length']}";
-        }
-
-        // Add precision and scale for decimal types
-        if ($type === 'decimal' && $column['precision'] && $column['scale']) {
-            $code .= ", {$column['precision']}, {$column['scale']}";
-        }
+        // Add parameters based on column type
+        $code .= $this->getColumnTypeParameters($type, $column);
 
         $code .= ")";
 
-        // Add modifiers
-        if ($column['unsigned']) {
-            $code .= "->unsigned()";
-        }
-
-        if ($column['nullable']) {
-            $code .= "->nullable()";
-        }
-
-        if ($column['default'] !== null) {
-            $default = $this->formatDefaultValue($column['default'], $type);
-            $code .= "->default({$default})";
-        }
-
-        if ($column['autoincrement']) {
-            // For auto-increment, we typically use id() or bigIncrements()
-            // But if it's already defined, we can use autoIncrement()
-            if (!in_array($type, ['id', 'bigIncrements', 'increments'])) {
-                $code .= "->autoIncrement()";
-            }
-        }
-
-        if (!empty($column['comment'])) {
-            $comment = addslashes($column['comment']);
-            $code .= "->comment('{$comment}')";
-        }
+        // Add modifiers in correct order
+        $code .= $this->getColumnModifiers($column, $type);
 
         $code .= ";\n";
 
         return $code;
+    }
+
+    /**
+     * Get column type parameters (length, precision, scale, enum values, etc.)
+     *
+     * @param string $type
+     * @param array $column
+     * @return string
+     */
+    protected function getColumnTypeParameters(string $type, array $column): string
+    {
+        $params = '';
+
+        switch ($type) {
+            case 'string':
+            case 'char':
+                // Include length if specified and not default (255 for string)
+                if (!empty($column['length']) && $column['length'] != 255) {
+                    $params .= ", {$column['length']}";
+                }
+                break;
+
+            case 'decimal':
+            case 'double':
+            case 'float':
+                // Include precision and scale
+                if (!empty($column['precision'])) {
+                    $params .= ", {$column['precision']}";
+                    if (!empty($column['scale'])) {
+                        $params .= ", {$column['scale']}";
+                    }
+                }
+                break;
+
+            case 'enum':
+            case 'set':
+                // Get enum/set values from database
+                $values = $this->getEnumValues($column);
+                if (!empty($values)) {
+                    $formatted = array_map(fn($v) => "'{$v}'", $values);
+                    $params .= ", [" . implode(', ', $formatted) . "]";
+                }
+                break;
+        }
+
+        return $params;
+    }
+
+    /**
+     * Get column modifiers (unsigned, nullable, default, etc.)
+     *
+     * @param array $column
+     * @param string $type
+     * @return string
+     */
+    protected function getColumnModifiers(array $column, string $type): string
+    {
+        $modifiers = '';
+
+        // Unsigned (must come before other modifiers)
+        if (!empty($column['unsigned'])) {
+            $modifiers .= "->unsigned()";
+        }
+
+        // Nullable
+        if ($column['nullable']) {
+            $modifiers .= "->nullable()";
+        }
+
+        // Default value
+        if ($column['default'] !== null && $column['default'] !== '') {
+            $default = $this->formatDefaultValue($column['default'], $type);
+            $modifiers .= "->default({$default})";
+        }
+
+        // Auto increment (for non-id columns)
+        if ($column['autoincrement'] && !in_array($column['name'], ['id'])) {
+            $modifiers .= "->autoIncrement()";
+        }
+
+        // Comment
+        if (!empty($column['comment'])) {
+            $comment = addslashes($column['comment']);
+            $modifiers .= "->comment('{$comment}')";
+        }
+
+        // After (if column has after constraint)
+        if (!empty($column['after'])) {
+            $modifiers .= "->after('{$column['after']}')";
+        }
+
+        return $modifiers;
+    }
+
+    /**
+     * Get enum/set values from database column definition.
+     *
+     * @param array $column
+     * @return array
+     */
+    protected function getEnumValues(array $column): array
+    {
+        // Try to get enum values from database
+        // This is database-specific
+        $driver = DB::connection($this->connection)->getDriverName();
+
+        try {
+            switch ($driver) {
+                case 'mysql':
+                    return $this->getMySQLEnumValues($column);
+
+                case 'pgsql':
+                    return $this->getPostgreSQLEnumValues($column);
+
+                default:
+                    return [];
+            }
+        } catch (\Exception $e) {
+            return [];
+        }
+    }
+
+    /**
+     * Get enum values from MySQL.
+     *
+     * @param array $column
+     * @return array
+     */
+    protected function getMySQLEnumValues(array $column): array
+    {
+        if (empty($column['type_definition'])) {
+            return [];
+        }
+
+        // Parse enum('value1','value2') format
+        if (preg_match("/^enum\('(.*)'\)$/i", $column['type_definition'], $matches)) {
+            return explode("','", $matches[1]);
+        }
+
+        if (preg_match("/^set\('(.*)'\)$/i", $column['type_definition'], $matches)) {
+            return explode("','", $matches[1]);
+        }
+
+        return [];
+    }
+
+    /**
+     * Get enum values from PostgreSQL.
+     *
+     * @param array $column
+     * @return array
+     */
+    protected function getPostgreSQLEnumValues(array $column): array
+    {
+        // PostgreSQL uses custom types for enums
+        // Would need to query pg_enum table
+        return [];
     }
 
     /**
@@ -197,12 +422,13 @@ class SchemaDumper
     protected function buildIndexCode(array $index): string
     {
         $columns = $this->formatColumns($index['columns']);
+        $indexName = !empty($index['name']) ? ", '{$index['name']}'" : '';
 
         if ($index['unique']) {
-            return "            \$table->unique({$columns});\n";
+            return "            \$table->unique({$columns}{$indexName});\n";
         }
 
-        return "            \$table->index({$columns});\n";
+        return "            \$table->index({$columns}{$indexName});\n";
     }
 
     /**
@@ -217,7 +443,14 @@ class SchemaDumper
         $foreignTable = $fk['foreign_table'];
         $foreignColumns = $this->formatColumns($fk['foreign_columns']);
 
-        $code = "            \$table->foreign({$localColumns})\n";
+        $code = "            \$table->foreign({$localColumns}";
+
+        // Add constraint name if exists
+        if (!empty($fk['name'])) {
+            $code .= ", '{$fk['name']}'";
+        }
+
+        $code .= ")\n";
         $code .= "                ->references({$foreignColumns})\n";
         $code .= "                ->on('{$foreignTable}')";
 
@@ -247,37 +480,67 @@ class SchemaDumper
         $type = strtolower($type);
 
         $map = [
+            // Integer types
             'int' => 'integer',
             'integer' => 'integer',
             'tinyint' => 'tinyInteger',
             'smallint' => 'smallInteger',
             'mediumint' => 'mediumInteger',
             'bigint' => 'bigInteger',
+
+            // String types
             'varchar' => 'string',
             'string' => 'string',
             'char' => 'char',
+
+            // Text types
             'text' => 'text',
             'mediumtext' => 'mediumText',
             'longtext' => 'longText',
             'tinytext' => 'text',
+
+            // Date/Time types
             'datetime' => 'dateTime',
             'timestamp' => 'timestamp',
             'date' => 'date',
             'time' => 'time',
             'year' => 'year',
+
+            // Boolean
             'boolean' => 'boolean',
             'bool' => 'boolean',
+            'tinyint(1)' => 'boolean',
+
+            // Numeric types
             'decimal' => 'decimal',
             'numeric' => 'decimal',
             'float' => 'float',
             'double' => 'double',
+            'real' => 'double',
+
+            // JSON
             'json' => 'json',
             'jsonb' => 'jsonb',
+
+            // Binary
             'binary' => 'binary',
+            'varbinary' => 'binary',
             'blob' => 'binary',
+            'longblob' => 'longBinary',
+            'mediumblob' => 'mediumBinary',
+
+            // Other
             'uuid' => 'uuid',
             'enum' => 'enum',
             'set' => 'set',
+            'geometry' => 'geometry',
+            'point' => 'point',
+            'linestring' => 'lineString',
+            'polygon' => 'polygon',
+            'geometrycollection' => 'geometryCollection',
+            'multipoint' => 'multiPoint',
+            'multilinestring' => 'multiLineString',
+            'multipolygon' => 'multiPolygon',
         ];
 
         return $map[$type] ?? 'string';
@@ -294,6 +557,16 @@ class SchemaDumper
     {
         if ($value === null) {
             return 'null';
+        }
+
+        // Handle CURRENT_TIMESTAMP
+        if (is_string($value) && stripos($value, 'CURRENT_TIMESTAMP') !== false) {
+            return "DB::raw('CURRENT_TIMESTAMP')";
+        }
+
+        // Handle NOW()
+        if (is_string($value) && stripos($value, 'NOW()') !== false) {
+            return "DB::raw('NOW()')";
         }
 
         // Handle boolean values
