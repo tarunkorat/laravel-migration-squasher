@@ -22,7 +22,23 @@ class SchemaInspector implements SchemaInspectorInterface
      */
     public function isDbalAvailable(): bool
     {
-        return class_exists(\Doctrine\DBAL\DriverManager::class);
+        $connection = DB::connection($this->connection);
+        return method_exists($connection, 'getDoctrineSchemaManager') &&
+            class_exists(\Doctrine\DBAL\DriverManager::class);
+    }
+
+    /**
+     * Get Doctrine Schema Manager (compatible with Laravel 8–12).
+     */
+    protected function getSchemaManager()
+    {
+        $connection = DB::connection($this->connection);
+
+        if (method_exists($connection, 'getDoctrineSchemaManager')) {
+            return $connection->getDoctrineSchemaManager();
+        }
+
+        throw new \RuntimeException('Unable to resolve Doctrine Schema Manager for this Laravel version.');
     }
 
     /**
@@ -38,18 +54,21 @@ class SchemaInspector implements SchemaInspectorInterface
     }
 
     /**
-     * Get table names using Doctrine DBAL (Laravel 8-9).
+     * Get table names using Doctrine DBAL.
      */
     protected function getTableNamesUsingDbal(): array
     {
-        $schemaManager = DB::connection($this->connection)
-            ->getDoctrineSchemaManager();
-
-        return $schemaManager->listTableNames();
+        try {
+            $schemaManager = $this->getSchemaManager();
+            return $schemaManager->listTableNames();
+        } catch (\Throwable $e) {
+            // Fallback to native if Doctrine is not supported
+            return $this->getTableNamesUsingNative();
+        }
     }
 
     /**
-     * Get table names using native Laravel (Laravel 10+).
+     * Get table names using native Laravel.
      */
     protected function getTableNamesUsingNative(): array
     {
@@ -99,12 +118,10 @@ class SchemaInspector implements SchemaInspectorInterface
      */
     protected function getTableColumnsUsingDbal(string $table): array
     {
-        $schemaManager = DB::connection($this->connection)
-            ->getDoctrineSchemaManager();
-
+        $schemaManager = $this->getSchemaManager();
         $columns = $schemaManager->listTableColumns($table);
-        $definitions = [];
 
+        $definitions = [];
         foreach ($columns as $column) {
             $definitions[] = [
                 'name' => $column->getName(),
@@ -114,7 +131,7 @@ class SchemaInspector implements SchemaInspectorInterface
                 'scale' => $column->getScale(),
                 'nullable' => !$column->getNotnull(),
                 'default' => $column->getDefault(),
-                'unsigned' => $column->getUnsigned(),
+                'unsigned' => method_exists($column, 'getUnsigned') ? $column->getUnsigned() : false,
                 'autoincrement' => $column->getAutoincrement(),
                 'comment' => $column->getComment(),
             ];
@@ -166,12 +183,10 @@ class SchemaInspector implements SchemaInspectorInterface
      */
     protected function getTableIndexesUsingDbal(string $table): array
     {
-        $schemaManager = DB::connection($this->connection)
-            ->getDoctrineSchemaManager();
-
+        $schemaManager = $this->getSchemaManager();
         $indexes = $schemaManager->listTableIndexes($table);
-        $indexDefinitions = [];
 
+        $indexDefinitions = [];
         foreach ($indexes as $index) {
             $indexDefinitions[] = [
                 'name' => $index->getName(),
@@ -221,12 +236,10 @@ class SchemaInspector implements SchemaInspectorInterface
      */
     protected function getTableForeignKeysUsingDbal(string $table): array
     {
-        $schemaManager = DB::connection($this->connection)
-            ->getDoctrineSchemaManager();
-
+        $schemaManager = $this->getSchemaManager();
         $foreignKeys = $schemaManager->listTableForeignKeys($table);
-        $fkDefinitions = [];
 
+        $fkDefinitions = [];
         foreach ($foreignKeys as $fk) {
             $fkDefinitions[] = [
                 'name' => $fk->getName(),
