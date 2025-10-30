@@ -25,9 +25,12 @@ class ExactSchemaGenerationTest extends TestCase
         Schema::create('test_table', function ($table) {
             $table->id();
             $table->string('name', 250)->nullable();
+            $table->string('email', 100);
         });
 
         $schemaDump = $this->dumper->generateSchemaDump();
+
+        dd($schemaDump);
 
         $this->assertStringContainsString("string('name', 250)", $schemaDump);
         $this->assertStringContainsString('nullable()', $schemaDump);

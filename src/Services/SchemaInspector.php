@@ -62,7 +62,6 @@ class SchemaInspector implements SchemaInspectorInterface
             $schemaManager = $this->getSchemaManager();
             return $schemaManager->listTableNames();
         } catch (\Throwable $e) {
-            // Fallback to native if Doctrine is not supported
             return $this->getTableNamesUsingNative();
         }
     }
@@ -102,7 +101,7 @@ class SchemaInspector implements SchemaInspectorInterface
     }
 
     /**
-     * Get columns for a specific table.
+     * Get columns for a specific table with enhanced metadata.
      */
     public function getTableColumns(string $table): array
     {
@@ -114,19 +113,25 @@ class SchemaInspector implements SchemaInspectorInterface
     }
 
     /**
-     * Get table columns using Doctrine DBAL.
+     * Get table columns using Doctrine DBAL with enhanced metadata.
      */
     protected function getTableColumnsUsingDbal(string $table): array
     {
         $schemaManager = $this->getSchemaManager();
         $columns = $schemaManager->listTableColumns($table);
+        $indexes = $this->getTableIndexes($table);
 
         $definitions = [];
         foreach ($columns as $column) {
-            $definitions[] = [
-                'name' => $column->getName(),
+            $columnName = $column->getName();
+
+            // Check if column has unique index
+            $hasUniqueIndex = $this->columnHasUniqueIndex($columnName, $indexes);
+
+            $columnDef = [
+                'name' => $columnName,
                 'type' => $column->getType()->getName(),
-                'type_definition' => $columnArray['columnDefinition'] ?? null,
+                'type_definition' => null,
                 'length' => $column->getLength(),
                 'precision' => $column->getPrecision(),
                 'scale' => $column->getScale(),
@@ -135,25 +140,36 @@ class SchemaInspector implements SchemaInspectorInterface
                 'unsigned' => method_exists($column, 'getUnsigned') ? $column->getUnsigned() : false,
                 'autoincrement' => $column->getAutoincrement(),
                 'comment' => $column->getComment(),
-                'collation' => $columnArray['collation'] ?? null,
-                'charset' => $columnArray['charset'] ?? null,
+                'unique' => $hasUniqueIndex,
+                'table_name' => $table,
             ];
+
+            // Try to get enum values from database directly
+            if (in_array($columnDef['type'], ['enum', 'set'])) {
+                $columnDef['type_definition'] = $this->getColumnTypeDefinition($table, $columnName);
+            }
+
+            $definitions[] = $columnDef;
         }
 
         return $definitions;
     }
 
     /**
-     * Get table columns using native Laravel Schema.
+     * Get table columns using native Laravel Schema with enhanced metadata.
      */
     protected function getTableColumnsUsingNative(string $table): array
     {
         $columns = Schema::connection($this->connection)->getColumns($table);
+        $indexes = $this->getTableIndexes($table);
         $definitions = [];
 
         foreach ($columns as $column) {
-            $definitions[] = [
-                'name' => $column['name'],
+            $columnName = $column['name'];
+            $hasUniqueIndex = $this->columnHasUniqueIndex($columnName, $indexes);
+
+            $columnDef = [
+                'name' => $columnName,
                 'type' => $column['type_name'] ?? $column['type'],
                 'length' => $column['length'] ?? null,
                 'precision' => $column['precision'] ?? null,
@@ -163,10 +179,73 @@ class SchemaInspector implements SchemaInspectorInterface
                 'unsigned' => $column['unsigned'] ?? false,
                 'autoincrement' => $column['auto_increment'] ?? false,
                 'comment' => $column['comment'] ?? null,
+                'unique' => $hasUniqueIndex,
+                'table_name' => $table,
             ];
+
+            // Try to get enum values from database directly
+            if (in_array($columnDef['type'], ['enum', 'set'])) {
+                $columnDef['type_definition'] = $this->getColumnTypeDefinition($table, $columnName);
+            }
+
+            $definitions[] = $columnDef;
         }
 
         return $definitions;
+    }
+
+    /**
+     * Check if a column has a unique index.
+     */
+    protected function columnHasUniqueIndex(string $columnName, array $indexes): bool
+    {
+        foreach ($indexes as $index) {
+            if (($index['unique'] ?? false) &&
+                count($index['columns']) === 1 &&
+                $index['columns'][0] === $columnName) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Get column type definition (for enum/set).
+     */
+    protected function getColumnTypeDefinition(string $table, string $column): ?string
+    {
+        $driver = DB::connection($this->connection)->getDriverName();
+
+        try {
+            switch ($driver) {
+                case 'mysql':
+                    $database = DB::connection($this->connection)->getDatabaseName();
+                    $result = DB::connection($this->connection)
+                        ->select(
+                            "SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+                             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+                            [$database, $table, $column]
+                        );
+
+                    return $result[0]->COLUMN_TYPE ?? null;
+
+                case 'pgsql':
+                    // PostgreSQL enum handling
+                    $result = DB::connection($this->connection)
+                        ->select(
+                            "SELECT udt_name FROM information_schema.columns
+                             WHERE table_name = ? AND column_name = ?",
+                            [$table, $column]
+                        );
+
+                    return $result[0]->udt_name ?? null;
+
+                default:
+                    return null;
+            }
+        } catch (\Exception $e) {
+            return null;
+        }
     }
 
     /**
