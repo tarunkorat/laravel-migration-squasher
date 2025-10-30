@@ -30,7 +30,7 @@ Squash old Laravel migrations into a single schema file to keep your migrations 
 Install the package via composer:
 
 ```bash
-composer require yourname/laravel-migration-squasher
+composer require tarunkorat/laravel-migration-squasher
 ```
 
 The package will automatically register itself via Laravel's package discovery.
