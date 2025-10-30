@@ -1,0 +1,65 @@
+{
+    "name": "tarunkorat/laravel-migration-squasher",
+    "description": "Squash old Laravel migrations into a single schema file",
+    "keywords": [
+        "laravel",
+        "migrations",
+        "database",
+        "squash",
+        "schema",
+        "laravel-8",
+        "laravel-9",
+        "laravel-10",
+        "laravel-11",
+        "laravel-12"
+    ],
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": "^8.0|^8.1|^8.2|^8.3",
+        "illuminate/support": "^8.0|^9.0|^10.0|^11.0|^12.0",
+        "illuminate/database": "^8.0|^9.0|^10.0|^11.0|^12.0",
+        "illuminate/console": "^8.0|^9.0|^10.0|^11.0|^12.0",
+        "doctrine/dbal": "^3.0|^4.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^6.0|^7.0|^8.0|^9.0|^10.0",
+        "phpunit/phpunit": "^9.5|^10.0|^11.0",
+        "mockery/mockery": "^1.6"
+    },
+    "autoload": {
+        "psr-4": {
+            "TarunKorat\\LaravelMigrationSquasher\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "TarunKorat\\LaravelMigrationSquasher\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "TarunKorat\\LaravelMigrationSquasher\\MigrationSquasherServiceProvider"
+            ]
+        }
+    },
+    "authors": [
+        {
+            "name": "tarunkorat",
+            "email": "tarunkorat336@gmail.com"
+        }
+    ],
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "scripts": {
+        "test": "vendor/bin/phpunit",
+        "test-coverage": "vendor/bin/phpunit --coverage-html coverage"
+    }
+}
