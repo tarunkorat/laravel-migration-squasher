@@ -132,7 +132,7 @@ class SchemaInspector implements SchemaInspectorInterface
                 'scale' => $column->getScale(),
                 'nullable' => !$column->getNotnull(),
                 'default' => $column->getDefault(),
-                'unsigned' => $column->getUnsigned(),
+                'unsigned' => method_exists($column, 'getUnsigned') ? $column->getUnsigned() : false,
                 'autoincrement' => $column->getAutoincrement(),
                 'comment' => $column->getComment(),
                 'collation' => $columnArray['collation'] ?? null,
