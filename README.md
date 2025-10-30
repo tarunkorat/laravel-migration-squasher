@@ -1,8 +1,8 @@
 # Laravel Migration Squasher
 
-[![Latest Version on Packagist](https://img.shields.io/packagist/v/yourname/laravel-migration-squasher.svg?style=flat-square)](https://packagist.org/packages/yourname/laravel-migration-squasher)
-[![Total Downloads](https://img.shields.io/packagist/dt/yourname/laravel-migration-squasher.svg?style=flat-square)](https://packagist.org/packages/yourname/laravel-migration-squasher)
-[![License](https://img.shields.io/packagist/l/yourname/laravel-migration-squasher.svg?style=flat-square)](https://packagist.org/packages/yourname/laravel-migration-squasher)
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/tarunkorat/laravel-migration-squasher.svg?style=flat-square)](https://packagist.org/packages/tarunkorat/laravel-migration-squasher)
+[![Total Downloads](https://img.shields.io/packagist/dt/tarunkorat/laravel-migration-squasher.svg?style=flat-square)](https://packagist.org/packages/tarunkorat/laravel-migration-squasher)
+[![License](https://img.shields.io/packagist/l/tarunkorat/laravel-migration-squasher.svg?style=flat-square)](https://packagist.org/packages/tarunkorat/laravel-migration-squasher)
 
 Squash old Laravel migrations into a single schema file to keep your migrations folder clean and manageable. 
 
@@ -199,7 +199,7 @@ Please see [CHANGELOG](CHANGELOG.md) for more information on what has changed re
 
 ## 🔒 Security
 
-If you discover any security related issues, please email your.email@example.com instead of using the issue tracker.
+If you discover any security related issues, please email tarunkorat336@gmail.com instead of using the issue tracker.
 
 ## 📄 License
 
@@ -207,7 +207,7 @@ The MIT License (MIT). Please see [License File](LICENSE.md) for more informatio
 
 ## 💡 Credits
 
-- [Your Name](https://github.com/yourusername)
+- [Tarun Korat](https://github.com/tarunkorat)
 - [All Contributors](../../contributors)
 
 ## 🙏 Support
